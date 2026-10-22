@@ -249,35 +249,67 @@ let cued = 0, live = null, soundOn = true;
 window.onYouTubeIframeAPIReady = () => { ytReady = true; startBtn.disabled = false; setLabel(startBtn, '▶ Start'); };
 setTimeout(() => { if(!ytReady){ startBtn.disabled = false; setLabel(startBtn, '▶ Start'); showErr('The YouTube player did not load. Check your internet connection. The camera will still work.'); } }, 9000);
 
+const ZOOM = 1.38;   // enlarge each video so the title bar and logo fall outside the shape
+
+/* Each slot is a YouTube player. The waiting slot plays silently and invisibly in the
+   background, jumps to a random moment, and is only revealed once it is really playing,
+   so the play button, spinner and opening title never show inside your frame. */
 function makeSlot(){
   const wrap = document.createElement('div'); wrap.className = 'shape';
   const host = document.createElement('div'); wrap.append(host); $('#shapes').append(wrap);
-  const slot = { wrap, player:null, ready:false, vid:pickId(slots[0] && slots[0].vid) };
-  const vars = { autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1, iv_load_policy:3, disablekb:1, fs:0, start:randStart() };
+  const slot = { wrap, player:null, ready:false, playing:false, seeded:false, vid:pickId(slots[0] && slots[0].vid) };
+  const vars = { autoplay:1, mute:1, controls:0, playsinline:1, rel:0, modestbranding:1, iv_load_policy:3, disablekb:1, fs:0, cc_load_policy:0 };
   if(location.protocol.startsWith('http')) vars.origin = location.origin;
   slot.player = new YT.Player(host, {
     width:640, height:360, videoId:slot.vid, playerVars:vars,
     events:{
-      onReady: () => { slot.ready = true; slot.player.setVolume(90); if(live === slot) playSlot(slot); },
-      onError: () => { bad.add(slot.vid); slot.vid = pickId(otherOf(slot).vid); if(!slot.vid) return;
-        if(live === slot){ slot.player.loadVideoById({videoId:slot.vid,startSeconds:randStart()}); updateNow(); }
-        else slot.player.cueVideoById({videoId:slot.vid,startSeconds:randStart()}); },
-      onStateChange: e => { if(e.data === YT.PlayerState.ENDED && live === slot){ slot.vid = pickId(otherOf(slot).vid); slot.player.loadVideoById({videoId:slot.vid,startSeconds:0}); updateNow(); } }
+      onReady: () => { slot.ready = true; slot.player.mute(); slot.player.setVolume(90); slot.player.playVideo(); },
+      onError: () => { bad.add(slot.vid); loadInto(slot, pickId(otherOf(slot) && otherOf(slot).vid)); },
+      onStateChange: e => {
+        const S = YT.PlayerState;
+        if(e.data === S.PLAYING){
+          if(!slot.seeded){
+            slot.seeded = true;
+            const d = slot.player.getDuration();
+            if(d > 40){ slot.player.seekTo(d*(.08 + Math.random()*.62), true); return; }  // random moment
+          }
+          slot.playing = true;
+          if(live === slot) applySound(slot);
+        } else if(e.data === S.ENDED){
+          slot.playing = false; loadInto(slot, pickId(otherOf(slot) && otherOf(slot).vid));
+        } else if(e.data === S.PAUSED && live !== slot){
+          slot.player.playVideo();   // keep the waiting video rolling silently
+        } else if(e.data !== S.PAUSED){
+          slot.playing = false;      // buffering / cued: hide until it plays again
+        }
+        updateVisible();
+      }
     }
   });
   return slot;
 }
 const otherOf = s => slots[0] === s ? slots[1] : slots[0];
-function playSlot(s){ if(!s.ready) return; if(soundOn){ s.player.unMute(); s.player.setVolume(90); } else s.player.mute(); s.player.playVideo(); }
-function showLive(){ if(!slots.length) return; live = slots[cued]; lastPlayed = live.vid; live.wrap.classList.add('on'); playSlot(live); updateNow(); }
+function loadInto(s, id){
+  if(!id || !s.ready) return;
+  s.vid = id; s.seeded = false; s.playing = false;
+  s.player.mute(); s.player.loadVideoById({videoId:id, startSeconds:0});
+  updateVisible(); updateNow();
+}
+function applySound(s){ if(!s.ready) return; if(soundOn && live === s){ s.player.unMute(); s.player.setVolume(90); } else s.player.mute(); }
+function updateVisible(){ for(const s of slots) s.wrap.classList.toggle('on', s === live && s.playing); }
+function showLive(){
+  if(!slots.length) return;
+  live = slots[cued]; lastPlayed = live.vid;
+  if(live.ready){ live.player.playVideo(); applySound(live); }
+  updateVisible(); updateNow();
+}
 function hideLive(){
   if(!live) return;
   const s = live; live = null;
-  s.wrap.classList.remove('on');
-  if(s.ready){ s.player.pauseVideo(); s.player.mute(); }
+  s.player.mute && s.ready && s.player.mute();
+  updateVisible();
   cued = slots.indexOf(otherOf(s));
-  s.vid = pickId(otherOf(s).vid);
-  if(s.ready && s.vid) s.player.cueVideoById({videoId:s.vid,startSeconds:randStart()});
+  loadInto(s, pickId(otherOf(s).vid));   // prepare a fresh video for the round after
   updateNow();
 }
 function updateNow(){ setLabel($('#nowText'), live ? `Video ${VIDEOS.indexOf(live.vid)+1} Of ${VIDEOS.length}` : 'No Video'); }
@@ -287,7 +319,7 @@ function layoutSlot(s, pts){
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
   for(const [x,y] of pts){ x0=Math.min(x0,x); y0=Math.min(y0,y); x1=Math.max(x1,x); y1=Math.max(y1,y); }
   const bw = Math.max(1,x1-x0), bh = Math.max(1,y1-y0);
-  const sc = Math.max(bw/640, bh/360);
+  const sc = Math.max(bw/640, bh/360) * ZOOM;
   ifr.style.transform = `translate(${(x0+(bw-640*sc)/2).toFixed(1)}px,${(y0+(bh-360*sc)/2).toFixed(1)}px) scale(${sc.toFixed(4)})`;
   s.wrap.style.clipPath = 'polygon(' + pts.map(([x,y]) => x.toFixed(1)+'px '+y.toFixed(1)+'px').join(',') + ')';
 }
@@ -375,7 +407,7 @@ function draw(){
   ctx.clearRect(0,0,W,H);
   if(shape){
     ctx.beginPath(); shape.pts.forEach(([x,y],i)=> i?ctx.lineTo(x,y):ctx.moveTo(x,y)); ctx.closePath();
-    if(!(live && live.ready)){ ctx.fillStyle='rgba(124,204,244,.55)'; ctx.fill(); }
+    if(!(live && live.playing)){ ctx.fillStyle='rgba(124,204,244,.85)'; ctx.fill(); }
     ctx.lineWidth=10; ctx.lineJoin='miter'; ctx.strokeStyle=SKY; ctx.stroke();
     ctx.lineWidth=3; ctx.strokeStyle=CHALK; ctx.stroke();
     for(const [x,y] of shape.pts) corner(x,y,26);
@@ -405,11 +437,11 @@ startBtn.addEventListener('click', async () => {
 });
 $('#soundBtn').addEventListener('click', e => {
   soundOn = !soundOn; e.currentTarget.setAttribute('aria-pressed', soundOn); setLabel(e.currentTarget, soundOn ? 'Sound On' : 'Sound Off');
-  if(live && live.ready){ soundOn ? live.player.unMute() : live.player.mute(); }
+  if(live) applySound(live);
 });
 $('#dotsBtn').addEventListener('click', e => { showDots = !showDots; e.currentTarget.setAttribute('aria-pressed', showDots); });
 $('#skipBtn').addEventListener('click', () => {
-  if(live && live.ready){ live.vid = pickId(live.vid); lastPlayed = live.vid; live.player.loadVideoById({videoId:live.vid,startSeconds:randStart()}); updateNow(); }
+  if(live && live.ready){ const id = pickId(live.vid); lastPlayed = id; loadInto(live, id); }
 });
 
 requestAnimationFrame(frame);
