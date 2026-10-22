@@ -75,12 +75,17 @@
   .hud-top .bar{overflow:hidden;text-overflow:ellipsis}
   .hud-side{position:fixed;right:max(16px,env(safe-area-inset-right,0px));top:50%;transform:translateY(-50%)}
   .hud-side .bar{writing-mode:vertical-rl;font-size:clamp(26px,3.4vw,44px);padding:.12em .04em .1em .02em}
+  .song{position:fixed;top:max(16px,env(safe-area-inset-top,0px));right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:min(44vw,560px);pointer-events:none;text-align:right}
+  .song .bar{white-space:normal;max-width:100%}
+  #songName{font-size:clamp(22px,2.9vw,40px)}
+  #artistName{font-size:clamp(15px,1.7vw,23px);background:var(--chalk);color:var(--ink)}
   .controls{position:fixed;left:max(16px,env(safe-area-inset-left,0px));bottom:max(16px,env(safe-area-inset-bottom,0px));display:flex;gap:10px;flex-wrap:wrap;max-width:calc(100vw - 32px)}
   .controls button{border:0;font-size:clamp(20px,2.6vw,32px);transition:background .15s,opacity .15s}
   .controls button:hover{background:var(--sky-deep)}
   .controls button[aria-pressed="false"]{opacity:.5}
 
   @media (max-width:700px){
+    .song{top:auto;bottom:max(76px,calc(env(safe-area-inset-bottom,0px) + 76px));max-width:calc(100vw - 32px)}
     .poster{grid-template-columns:1fr}
     .p-side{grid-column:1;grid-row:auto;justify-content:flex-end}
     .p-side .bar{writing-mode:horizontal-tb;padding:.06em .12em .02em .08em}
@@ -104,6 +109,7 @@
 
 <div class="hud-top" id="hudTop" hidden><span class="bar" id="hudText" data-dot>Show Both Hands</span></div>
 <div class="hud-side" id="hudSide" hidden><span class="bar" id="nowText" data-dot>No Video</span></div>
+<div class="song" id="song" hidden><span class="bar" id="songName"></span><span class="bar" id="artistName"></span></div>
 <div class="controls" id="controls" hidden>
   <button class="bar" id="soundBtn" aria-pressed="true" data-dot>Sound On</button>
   <button class="bar" id="dotsBtn" aria-pressed="true" data-dot>Hand Dots</button>
@@ -275,6 +281,7 @@ function makeSlot(){
           }
           slot.playing = true;
           if(live === slot) applySound(slot);
+          updateNow();
         } else if(e.data === S.ENDED){
           slot.playing = false; loadInto(slot, pickId(otherOf(slot) && otherOf(slot).vid));
         } else if(e.data === S.PAUSED && live !== slot){
@@ -282,7 +289,7 @@ function makeSlot(){
         } else if(e.data !== S.PAUSED){
           slot.playing = false;      // buffering / cued: hide until it plays again
         }
-        updateVisible();
+        updateVisible(); if(live === slot) updateNow();
       }
     }
   });
@@ -312,7 +319,26 @@ function hideLive(){
   loadInto(s, pickId(otherOf(s).vid));   // prepare a fresh video for the round after
   updateNow();
 }
-function updateNow(){ setLabel($('#nowText'), live ? `Video ${VIDEOS.indexOf(live.vid)+1} Of ${VIDEOS.length}` : 'No Video'); }
+function songInfo(sl){
+  let d = {}; try{ d = sl.player.getVideoData() || {}; }catch{}
+  let t = (d.title || '').trim(), a = (d.author || '').trim();
+  a = a.replace(/\s*-\s*Topic$/i,'').replace(/VEVO$/i,'').trim();
+  t = t.replace(/\s*[(\[][^)\]]*(official|video|audio|lyric|visuali[sz]er|hd|4k|remaster|mv|clip)[^)\]]*[)\]]/gi,'')
+       .replace(/\s*\|.*$/,'').trim();
+  const m = t.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  if(m){ a = m[1].trim(); t = m[2].trim(); }
+  t = t.replace(/^["“'‘]+|["”'’]+$/g,'').trim();
+  return { song:t, artist:a };
+}
+function updateNow(){
+  const box = $('#song');
+  if(!(live && live.playing)){ box.hidden = true; return; }
+  const {song, artist} = songInfo(live);
+  if(!song){ box.hidden = true; return; }
+  setLabel($('#songName'), song);
+  const an = $('#artistName'); an.hidden = !artist; if(artist) setLabel(an, artist);
+  box.hidden = false;
+}
 
 function layoutSlot(s, pts){
   const ifr = s.wrap.querySelector('iframe'); if(!ifr) return;
@@ -432,7 +458,7 @@ startBtn.addEventListener('click', async () => {
   try{ await startCamera(); }
   catch(e){ showErr(e.message); startBtn.disabled = false; setLabel(startBtn, '▶ Start'); return; }
   $('#start').hidden = true;
-  for(const id of ['tint','ht','lhatch','hudTop','hudSide','controls']) $('#'+id).hidden = false;
+  for(const id of ['tint','ht','lhatch','hudTop','controls']) $('#'+id).hidden = false;
   setHud('Show Both Hands','rain');
 });
 $('#soundBtn').addEventListener('click', e => {
